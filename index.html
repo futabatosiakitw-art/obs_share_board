@@ -12,6 +12,7 @@
     #auth-screen input { padding: 8px 12px; background: #26262c; border: 1px solid #464649; color: #fff; border-radius: 4px; font-size: 14px; text-align: center; }
     #auth-screen button { padding: 8px 16px; background: var(--accent); border: none; color: #fff; font-weight: bold; border-radius: 4px; cursor: pointer; }
 
+    /* URLに ?display がある場合は操作パネルを完全非表示＆透過（接続処理は生かす） */
     body.display-mode { background: transparent !important; }
     body.display-mode #auth-screen { display: none !important; }
     body.display-mode .control-panel { display: none !important; }
@@ -48,7 +49,6 @@
   <div class="control-panel" id="control-panel">
     <div class="panel-group">
       <b>🔗 接続:</b>
-      <!-- ホスト用：自動生成されるのでボタン不要、発行系ボタンだけ並べる -->
       <button id="btn-share" onclick="showShareUrlModal()" style="display:none; background:#007aff; border-color:#007aff;">🤝 共有URLを発行</button>
       <button onclick="showSourceUrlModal()" style="background:#00f076; color:#000; border-color:#00f076;">📺 ソースURLを発行</button>
       
@@ -92,7 +92,7 @@
     </div>
 
     <div class="panel-group">
-      <button onclick="clearMyCanvas()">自分の消去</button>
+      <button onclick="clearMyCanvas()">画面クリア</button>
       <button onclick="clearRoomCanvas()" style="background:#ff3b30; border-color:#ff3b30;">全体消去</button>
     </div>
   </div>
@@ -133,6 +133,7 @@
         }
       } catch(e) {}
 
+      // displayモードの場合でも、UIを隠すだけで接続処理はしっかり走らせる
       if (window.location.search.includes('display')) {
         document.body.classList.add('display-mode');
       }
@@ -143,12 +144,12 @@
       const urlParams = new URLSearchParams(window.location.search);
       const roomId = urlParams.get('room');
 
-      if (roomId && !window.location.search.includes('display')) {
-        // 【ゲスト起動】URLにroomIDが含まれている場合、自動でゲストとして参加
+      if (roomId) {
+        // roomパラメータがあればゲストとしてその部屋に接続
         currentRoomId = roomId;
         joinRoom(roomId);
-      } else if (!window.location.search.includes('display')) {
-        // 【ホスト起動】通常のURLを開いた場合、自動で自分の部屋（ピア）を作成
+      } else {
+        // なければ自分がホストとして部屋を作成
         initHostRoom();
       }
     };
@@ -303,8 +304,10 @@
       }
     }
 
+    // 「自分の消去」を押したときは、自分の画面をクリアしつつ相手にもクリアを伝える
     function clearMyCanvas() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+      broadcastData({ type: 'clear_room' });
     }
 
     function clearRoomCanvas() {
@@ -314,7 +317,6 @@
       }
     }
 
-    // 自動でホストとして部屋を作成
     function initHostRoom() {
       const statusArea = document.getElementById('room-status-area');
       peer = new Peer();
@@ -322,24 +324,23 @@
 
       peer.on('open', (id) => {
         currentRoomId = id;
-        statusArea.innerHTML = `<span style="color:#00f076;">待機中 (ホスト)</span>`;
-        // ホストなので共有URL発行ボタンを表示
-        document.getElementById('btn-share').style.display = 'inline-block';
+        if(statusArea) statusArea.innerHTML = `<span style="color:#00f076;">待機中 (ホスト)</span>`;
+        const btnShare = document.getElementById('btn-share');
+        if(btnShare) btnShare.style.display = 'inline-block';
       });
 
       peer.on('connection', (connection) => {
         connections.push(connection);
         setupConnection(connection);
-        statusArea.innerHTML = `<span style="color:#00f076;">コラボ中！(接続数: ${connections.length})</span>`;
+        if(statusArea) statusArea.innerHTML = `<span style="color:#00f076;">コラボ中！</span>`;
       });
       
       peer.on('error', (err) => {
-        statusArea.innerHTML = `<span style="color:#ff3b30;">通信エラー</span>`;
+        if(statusArea) statusArea.innerHTML = `<span style="color:#ff3b30;">通信エラー</span>`;
         console.error(err);
       });
     }
 
-    // ゲストとして自動入室
     function joinRoom(roomId) {
       const statusArea = document.getElementById('room-status-area');
       peer = new Peer();
@@ -348,23 +349,21 @@
       peer.on('open', () => {
         conn = peer.connect(roomId);
         setupConnection(conn);
-        statusArea.innerHTML = `<span style="color:#00f076;">コラボ接続完了 (ゲスト)</span>`;
+        if(statusArea) statusArea.innerHTML = `<span style="color:#00f076;">コラボ接続完了 (ゲスト)</span>`;
       });
       
       peer.on('error', (err) => {
-        statusArea.innerHTML = `<span style="color:#ff3b30;">ホストが見つかりません</span>`;
+        if(statusArea) statusArea.innerHTML = `<span style="color:#ff3b30;">ホストが見つかりません</span>`;
         console.error(err);
       });
     }
 
-    // 共有URLをポップアップで発行
     function showShareUrlModal() {
       let cleanUrl = window.location.href.split('?')[0];
       const shareUrl = `${cleanUrl}?room=${currentRoomId}`;
       prompt("【コラボ相手に渡す共有URL】\nこのURLをコピーして相手に送り、相手のカスタムブラウザドックに入れてもらってください：", shareUrl);
     }
 
-    // OBSブラウザソース用URLをポップアップで発行
     function showSourceUrlModal() {
       if (!currentRoomId) {
         alert("ルームIDの取得中です。数秒待ってからもう一度お試しください。");
