@@ -58,9 +58,7 @@
   <div id="custom-modal">
     <div class="modal-content">
       <h3 id="modal-title">URL発行</h3>
-      <div id="modal-body" style="display:flex; flex-direction:column; gap:8px;">
-        <!-- ここに動的にURL入力欄が生成されます -->
-      </div>
+      <div id="modal-body" style="display:flex; flex-direction:column; gap:8px;"></div>
       <button onclick="closeModal()" style="background:#464649; padding:6px; margin-top:4px;">閉じる</button>
     </div>
   </div>
@@ -147,11 +145,20 @@
     let currentRoomId = null;
 
     window.onload = () => {
-      try {
-        if (localStorage.getItem('shared_board_pass') === SECRET_PASSWORD) {
-          document.getElementById('auth-screen').style.display = 'none';
-        }
-      } catch(e) {}
+      const urlParams = new URLSearchParams(window.location.search);
+      const roomId = urlParams.get('room');
+
+      // ★URLに room（共有URL経由）が含まれている場合は、パスワード入力を自動でバイパスする
+      if (roomId) {
+        document.getElementById('auth-screen').style.display = 'none';
+      } else {
+        // ホストとして直接開いた場合は保存されたパスワードをチェック
+        try {
+          if (localStorage.getItem('shared_board_pass') === SECRET_PASSWORD) {
+            document.getElementById('auth-screen').style.display = 'none';
+          }
+        } catch(e) {}
+      }
 
       if (window.location.search.includes('display')) {
         document.body.classList.add('display-mode');
@@ -159,9 +166,6 @@
 
       updateTransform();
       window.addEventListener('resize', updateTransform);
-
-      const urlParams = new URLSearchParams(window.location.search);
-      const roomId = urlParams.get('room');
 
       if (roomId) {
         currentRoomId = roomId;
@@ -374,7 +378,6 @@
       });
     }
 
-    // --- カスタムモーダルの制御 ---
     function showShareModal() {
       if (!currentRoomId) {
         alert("ルームIDの取得中です。数秒待ってからもう一度お試しください。");
