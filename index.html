@@ -12,7 +12,6 @@
     #auth-screen input { padding: 8px 12px; background: #26262c; border: 1px solid #464649; color: #fff; border-radius: 4px; font-size: 14px; text-align: center; }
     #auth-screen button { padding: 8px 16px; background: var(--accent); border: none; color: #fff; font-weight: bold; border-radius: 4px; cursor: pointer; }
 
-    /* URLに ?display がある場合は操作パネルを完全非表示＆透過（接続処理は生かす） */
     body.display-mode { background: transparent !important; }
     body.display-mode #auth-screen { display: none !important; }
     body.display-mode .control-panel { display: none !important; }
@@ -133,7 +132,6 @@
         }
       } catch(e) {}
 
-      // displayモードの場合でも、UIを隠すだけで接続処理はしっかり走らせる
       if (window.location.search.includes('display')) {
         document.body.classList.add('display-mode');
       }
@@ -145,11 +143,9 @@
       const roomId = urlParams.get('room');
 
       if (roomId) {
-        // roomパラメータがあればゲストとしてその部屋に接続
         currentRoomId = roomId;
         joinRoom(roomId);
       } else {
-        // なければ自分がホストとして部屋を作成
         initHostRoom();
       }
     };
@@ -304,7 +300,6 @@
       }
     }
 
-    // 「自分の消去」を押したときは、自分の画面をクリアしつつ相手にもクリアを伝える
     function clearMyCanvas() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       broadcastData({ type: 'clear_room' });
@@ -358,10 +353,20 @@
       });
     }
 
+    // 【共有URL発行】ゲスト配信者用 ＆ リスナー・一般参加用を両方表示
     function showShareUrlModal() {
       let cleanUrl = window.location.href.split('?')[0];
-      const shareUrl = `${cleanUrl}?room=${currentRoomId}`;
-      prompt("【コラボ相手に渡す共有URL】\nこのURLをコピーして相手に送り、相手のカスタムブラウザドックに入れてもらってください：", shareUrl);
+      let shareUrl = `${cleanUrl}?room=${currentRoomId}`;
+      
+      let message = "【コラボ配信者用（ドック＆ソース設定用）】\n" +
+                    "このURLをゲスト配信者に渡してください（カスタムドックに入力して使えます）\n" +
+                    shareUrl + "\n\n" +
+                    "--------------------------------------------------\n" +
+                    "【リスナー・参加者用（ブラウザお絵描き参加用）】\n" +
+                    "このURLを配信用チャット等に貼ると、リスナーもブラウザから直接お絵描きに参加できます\n" +
+                    shareUrl;
+
+      prompt("以下のURLをコピーして相手に伝えてください：", message);
     }
 
     function showSourceUrlModal() {
