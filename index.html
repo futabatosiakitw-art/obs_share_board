@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>P2P Shared Canvas for OBS</title>
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <style>
+    :root { --bg: #18181b; --card: #26262c; --accent: #9146ff; --text: #efeff1; }
+    body { margin: 0; padding: 0; background: #18181b; color: var(--text); font-family: sans-serif; font-size: 11px; overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
+    
+    /* パスワード認証画面（ロック中） */
+    #auth-screen { position: fixed; inset: 0; background: #121215; z-index: 9999; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 12px; }
+    #auth-screen input { padding: 8px 12px; background: #26262c; border: 1px solid #464649; color: #fff; border-radius: 4px; font-size: 14px; text-align: center; }
+    #auth-screen button { padding: 8px 16px; background: var(--accent); border: none; color: #fff; font-weight: bold; border-radius: 4px; cursor: pointer; }
+
+    /* 操作コントロールパネル */
+    .control-panel { background: #1f1f23; border-bottom: 2px solid #9146ff; padding: 6px 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex-shrink: 0; }
+    .panel-group { background: var(--card); border: 1px solid #303036; padding: 5px 7px; border-radius: 4px; display: flex; align-items: center; gap: 5px; }
+    button { background: #303036; border: 1px solid #464649; color: var(--text); padding: 4px 8px; border-radius: 3px; cursor: pointer; font-weight: bold; font-size: 10px; }
+    button:hover { background: var(--accent); border-color: var(--accent); }
+    input[type="range"] { width: 70px; cursor: pointer; }
+    select, input[type="file"] { background: #000; color: #fff; border: 1px solid #464649; padding: 2px; border-radius: 3px; font-size: 10px; }
+
+    .color-btn { width: 18px; height: 18px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
+    .color-btn.active { border-color: #fff; transform: scale(1.1); }
+
+    .stamp-thumb { width: 22px; height: 22px; object-fit: cover; border: 1px solid #464649; cursor: pointer; border-radius: 2px; background: #fff; }
+    .stamp-thumb.active { border-color: var(--accent); }
+
+    /* ビューポート */
+    .viewport { position: relative; flex: 1; width: 100%; background: transparent; overflow: hidden; display: flex; justify-content: center; align-items: center; }
+    
+    .canvas-container { 
+      position: absolute; 
+      width: 1920px; 
+      height: 1080px; 
+      transform-origin: center center; 
+      background-size: contain; 
+      background-position: center; 
+      background-repeat: no-repeat;
+      background-color: transparent;
+    }
+    canvas { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; pointer-events: auto; cursor: crosshair; }
+
+    .url-box { background: #000; padding: 2px 4px; border: 1px solid #464649; border-radius: 3px; color: #00f076; font-family: monospace; font-size: 10px; user-select: all; width: 180px; }
+  </style>
+</head>
+<body>
+
+  <!-- パスワード認証画面 -->
+  <div id="auth-screen">
+    <h2>🔒 購入者用パスワードを入力してください</h2>
+    <p style="color:#aaa; margin:0;">BOOTHの商品説明または同梱テキストに記載されている合言葉を入力してください。</p>
+    <input type="password" id="auth-password" placeholder="パスワードを入力">
+    <button onclick="checkPassword()">認証する</button>
+    <p id="auth-error" style="color:#ff3b30; margin:0; display:none;">パスワードが違います</p>
+  </div>
+
+  <!-- 操作コントロールパネル -->
+  <div class="control-panel" id="control-panel">
+    <div class="panel-group">
+      <b>🔗 接続:</b>
+      <button onclick="createRoom()">部屋を作る</button>
+      <span id="room-info">未接続</span>
+    </div>
+
+    <div class="panel-group">
+      <b>🖼️ 背景画像:</b>
+      <input type="file" accept="image/*" onchange="loadBgImage(event)">
+      <button onclick="clearBgImage()">削除</button>
+    </div>
+
+    <div class="panel-group">
+      <b>🔍 OBS表示 (%):</b> <input type="range" id="scale-range" min="10" max="200" value="100" oninput="updateTransform()"> <span id="scale-val">100%</span>
+      <b>↔️ X:</b> <input type="range" id="pos-x" min="-960" max="960" value="0" oninput="updateTransform()">
+      <b>↕️ Y:</b> <input type="range" id="pos-y" min="-540" max="540" value="0" oninput="updateTransform()">
+    </div>
+
+    <div class="panel-group">
+      <b>ペン:</b>
+      <button class="color-btn active" style="background:#000000;" onclick="setTool('pen', '#000000', this)"></button>
+      <button class="color-btn" style="background:#ffffff;" onclick="setTool('pen', '#ffffff', this)"></button>
+      <button class="color-btn" style="background:#ff3b30;" onclick="setTool('pen', '#ff3b30', this)"></button>
+      <button class="color-btn" style="background:#34c759;" onclick="setTool('pen', '#34c759', this)"></button>
+      <button class="color-btn" style="background:#ffcc00;" onclick="setTool('pen', '#ffcc00', this)"></button>
+      <button class="color-btn" style="background:#007aff;" onclick="setTool('pen', '#007aff', this)"></button>
+      <button onclick="setTool('eraser', null, this)">消しゴム</button>
+      <span>太さ:</span> <input type="range" id="brush-size" min="3" max="20" value="5" oninput="document.getElementById('size-val').innerText=this.value+'px'"> <span id="size-val">5px</span>
+    </div>
+
+    <div class="panel-group">
+      <b>スタンプ:</b>
+      <div id="stamp-container" style="display:flex; gap:3px;">
+        <div class="stamp-thumb active" onclick="setStamp('⭐', this)" style="display:flex;justify-content:center;align-items:center;font-size:14px;">⭐</div>
+        <div class="stamp-thumb" onclick="setStamp('💖', this)" style="display:flex;justify-content:center;align-items:center;font-size:14px;">💖</div>
+        <div class="stamp-thumb" onclick="setStamp('🔥', this)" style="display:flex;justify-content:center;align-items:center;font-size:14px;">🔥</div>
+        <div class="stamp-thumb" onclick="setStamp('👍', this)" style="display:flex;justify-content:center;align-items:center;font-size:14px;">👍</div>
+        <div class="stamp-thumb" onclick="setStamp('✨', this)" style="display:flex;justify-content:center;align-items:center;font-size:14px;">✨</div>
+      </div>
+      <input type="file" accept="image/*" style="width:60px;" onchange="loadCustomStamp(event)" title="ローカル画像を追加">
+    </div>
+
+    <div class="panel-group">
+      <button onclick="clearMyCanvas()">自分の消去</button>
+      <button onclick="clearRoomCanvas()" style="background:#ff3b30; border-color:#ff3b30;">全体消去</button>
+    </div>
+  </div>
+
+  <!-- ビューポート -->
+  <div class="viewport" id="viewport">
+    <div class="canvas-container" id="canvas-container">
+      <canvas id="paintCanvas" width="1920" height="1080"></canvas>
+    </div>
+  </div>
+
+  <script>
+    // ==========================================
+    // ▼ ここにBOOTHの購入者にだけ伝える合言葉を設定してください
+    // ==========================================
+    const SECRET_PASSWORD = "Siaki_Atelier_2026"; 
+
+    function checkPassword() {
+      const inputVal = document.getElementById('auth-password').value;
+      if (inputVal === SECRET_PASSWORD) {
+        document.getElementById('auth-screen').style.display = 'none';
+      } else {
+        document.getElementById('auth-error').style.display = 'block';
+      }
+    }
+
+    // Enterキーでも認証できるようにする
+    document.getElementById('auth-password').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') checkPassword();
+    });
+
+    // OBSのブラウザソース(?display)として開いたときは、認証画面をスキップして即時表示させる場合
+    window.onload = () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.has('display')) {
+        document.getElementById('auth-screen').style.display = 'none';
+      }
+
+      updateTransform();
+      window.addEventListener('resize', updateTransform);
+
+      const roomId = urlParams.get('room');
+      if (roomId) {
+        joinRoom(roomId);
+      }
+    };
+
+    const canvas = document.getElementById('paintCanvas');
+    const ctx = canvas.getContext('2d');
+    const container = document.getElementById('canvas-container');
+    const viewport = document.getElementById('viewport');
+
+    let isDrawing = false;
+    let currentTool = 'pen';
+    let currentColor = '#000000';
+    let currentStamp = '⭐';
+
+    let peer = null;
+    let conn = null;
+    let isHost = false;
+    let connections = [];
+
+    function updateTransform() {
+      const scaleInput = document.getElementById('scale-range').value;
+      document.getElementById('scale-val').innerText = scaleInput + '%';
+      const userScale = scaleInput / 100;
+
+      const x = parseInt(document.getElementById('pos-x').value) || 0;
+      const y = parseInt(document.getElementById('pos-y').value) || 0;
+
+      const vWidth = viewport.clientWidth || 1920;
+      const vHeight = viewport.clientHeight || 1080;
+      const baseScale = Math.min(vWidth / 1920, vHeight / 1080);
+
+      const finalScale = baseScale * userScale;
+      container.style.transform = `translate(${x}px, ${y}px) scale(${finalScale})`;
+    }
+
+    function setTool(tool, color, element) {
+      currentTool = tool;
+      if (color) currentColor = color;
+      document.querySelectorAll('.color-btn, .stamp-thumb').forEach(el => el.classList.remove('active'));
+      if (element) element.classList.add('active');
+    }
+
+    function setStamp(stampData, element) {
+      currentTool = 'stamp';
+      currentStamp = stampData;
+      document.querySelectorAll('.color-btn, .stamp-thumb').forEach(el => el.classList.remove('active'));
+      if (element) element.classList.add('active');
+    }
+
+    function loadCustomStamp(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const containerEl = document.getElementById('stamp-container');
+          const thumb = document.createElement('img');
+          thumb.src = e.target.result;
+          thumb.className = 'stamp-thumb';
+          thumb.onclick = () => { setStamp(img, thumb); };
+          containerEl.appendChild(thumb);
+          setStamp(img, thumb);
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function loadBgImage(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const dataUrl = e.target.result;
+        container.style.backgroundImage = `url(${dataUrl})`;
+        broadcastData({ type: 'set_bg', dataUrl: dataUrl });
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function clearBgImage() {
+      container.style.backgroundImage = 'none';
+      const fileInput = document.querySelector('input[type="file"]');
+      if(fileInput) fileInput.value = '';
+      broadcastData({ type: 'clear_bg' });
+    }
+
+    canvas.addEventListener('mousedown', startDraw);
+    canvas.addEventListener('mousemove', draw);
+    canvas.addEventListener('mouseup', stopDraw);
+    canvas.addEventListener('mouseleave', stopDraw);
+
+    function getMousePos(e) {
+      const rect = canvas.getBoundingClientRect();
+      const x = (e.clientX - rect.left) / (rect.width / 1920);
+      const y = (e.clientY - rect.top) / (rect.height / 1080);
+      return { x, y };
+    }
+
+    let lastX = 0, lastY = 0;
+
+    function startDraw(e) {
+      const pos = getMousePos(e);
+      isDrawing = true;
+      lastX = pos.x;
+      lastY = pos.y;
+
+      if (currentTool === 'stamp') {
+        drawStamp(pos.x, pos.y, currentStamp);
+        broadcastData({ type: 'draw_stamp', x: pos.x, y: pos.y, stamp: currentStamp });
+        isDrawing = false;
+      }
+    }
+
+    function draw(e) {
+      if (!isDrawing) return;
+      const pos = getMousePos(e);
+      const size = document.getElementById('brush-size').value;
+
+      drawLine(lastX, lastY, pos.x, pos.y, currentTool === 'eraser' ? 'rgba(0,0,0,1)' : currentColor, size, currentTool === 'eraser');
+      
+      broadcastData({
+        type: 'draw_line',
+        x1: lastX, y1: lastY, x2: pos.x, y2: pos.y,
+        color: currentTool === 'eraser' ? 'rgba(0,0,0,1)' : currentColor,
+        size: size,
+        isEraser: (currentTool === 'eraser')
+      });
+
+      lastX = pos.x;
+      lastY = pos.y;
+    }
+
+    function stopDraw() { isDrawing = false; }
+
+    function drawLine(x1, y1, x2, y2, color, size, isEraser) {
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = size;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      if (isEraser) {
+        ctx.globalCompositeOperation = 'destination-out';
+      } else {
+        ctx.globalCompositeOperation = 'source-over';
+      }
+      ctx.stroke();
+      ctx.closePath();
+    }
+
+    function drawStamp(x, y, stamp) {
+      ctx.globalCompositeOperation = 'source-over';
+      if (typeof stamp === 'string') {
+        ctx.font = '40px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(stamp, x, y);
+      } else if (stamp instanceof HTMLImageElement) {
+        ctx.drawImage(stamp, x - 25, y - 25, 50, 50);
+      }
+    }
+
+    function clearMyCanvas() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+
+    function clearRoomCanvas() {
+      if (confirm("本当に部屋全体の書き込みを消去しますか？")) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        broadcastData({ type: 'clear_room' });
+      }
+    }
+
+    function createRoom() {
+      peer = new Peer();
+      isHost = true;
+
+      peer.on('open', (id) => {
+        let cleanUrl = window.location.href.split('?')[0];
+        const shareUrl = `${cleanUrl}?room=${id}&display`;
+        
+        document.getElementById('room-info').innerHTML = `部屋URL: <input class="url-box" type="text" value="${shareUrl}" readonly onclick="this.select()">`;
+      });
+
+      peer.on('connection', (connection) => {
+        connections.push(connection);
+        setupConnection(connection);
+      });
+    }
+
+    function joinRoom(roomId) {
+      peer = new Peer();
+      isHost = false;
+
+      peer.on('open', () => {
+        conn = peer.connect(roomId);
+        setupConnection(conn);
+        document.getElementById('room-info').innerText = 'コラボルーム接続中！';
+      });
+    }
+
+    function setupConnection(connection) {
+      connection.on('data', (data) => {
+        if (data.type === 'draw_line') {
+          drawLine(data.x1, data.y1, data.x2, data.y2, data.color, data.size, data.isEraser);
+        } else if (data.type === 'draw_stamp') {
+          drawStamp(data.x, data.y, data.stamp);
+        } else if (data.type === 'clear_room') {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+        } else if (data.type === 'set_bg') {
+          container.style.backgroundImage = `url(${data.dataUrl})`;
+        } else if (data.type === 'clear_bg') {
+          container.style.backgroundImage = 'none';
+        }
+
+        if (isHost) {
+          connections.forEach(c => { if (c !== connection) c.send(data); });
+        }
+      });
+    }
+
+    function broadcastData(data) {
+      if (isHost) {
+        connections.forEach(c => c.send(data));
+      } else if (conn && conn.open) {
+        conn.send(data);
+      }
+    }
+  </script>
+</body>
+</html>
