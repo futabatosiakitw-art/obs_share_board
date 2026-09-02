@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ja">　
+<html lang="ja">
 <head>
   <meta charset="UTF-8">
   <title>P2P Shared Canvas for OBS</title>
@@ -12,8 +12,18 @@
     #auth-screen input { padding: 8px 12px; background: #26262c; border: 1px solid #464649; color: #fff; border-radius: 4px; font-size: 14px; text-align: center; }
     #auth-screen button { padding: 8px 16px; background: var(--accent); border: none; color: #fff; font-weight: bold; border-radius: 4px; cursor: pointer; }
 
+    /* カスタムモーダル（ポップアップ）のデザイン */
+    #custom-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 8888; display: none; justify-content: center; align-items: center; }
+    .modal-content { background: #26262c; border: 1px solid #464649; border-radius: 6px; padding: 16px; width: 420px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
+    .modal-content h3 { margin: 0; font-size: 13px; color: var(--accent); }
+    .url-row { display: flex; flex-direction: column; gap: 4px; background: #18181b; padding: 8px; border-radius: 4px; border: 1px solid #303036; }
+    .url-row label { font-weight: bold; color: #aaa; font-size: 10px; }
+    .url-input-box { display: flex; gap: 6px; }
+    .url-input-box input { flex: 1; background: #000; color: #00f076; border: 1px solid #464649; padding: 4px; border-radius: 3px; font-family: monospace; font-size: 10px; }
+
     body.display-mode { background: transparent !important; }
     body.display-mode #auth-screen { display: none !important; }
+    body.display-mode #custom-modal { display: none !important; }
     body.display-mode .control-panel { display: none !important; }
     body.display-mode .viewport { width: 100vw !important; height: 100vh !important; border: none !important; background: transparent !important; }
 
@@ -44,12 +54,23 @@
     <p id="auth-error" style="color:#ff3b30; margin:0; display:none;">パスワードが違います</p>
   </div>
 
+  <!-- カスタムポップアップモーダル -->
+  <div id="custom-modal">
+    <div class="modal-content">
+      <h3 id="modal-title">URL発行</h3>
+      <div id="modal-body" style="display:flex; flex-direction:column; gap:8px;">
+        <!-- ここに動的にURL入力欄が生成されます -->
+      </div>
+      <button onclick="closeModal()" style="background:#464649; padding:6px; margin-top:4px;">閉じる</button>
+    </div>
+  </div>
+
   <!-- 操作コントロールパネル -->
   <div class="control-panel" id="control-panel">
     <div class="panel-group">
       <b>🔗 接続:</b>
-      <button id="btn-share" onclick="showShareUrlModal()" style="display:none; background:#007aff; border-color:#007aff;">🤝 共有URLを発行</button>
-      <button onclick="showSourceUrlModal()" style="background:#00f076; color:#000; border-color:#00f076;">📺 ソースURLを発行</button>
+      <button id="btn-share" onclick="showShareModal()" style="display:none; background:#007aff; border-color:#007aff;">🤝 共有URLを発行</button>
+      <button onclick="showSourceModal()" style="background:#00f076; color:#000; border-color:#00f076;">📺 ソースURLを発行</button>
       
       <span id="room-status-area" style="color:#ffcc00; font-family:monospace; margin-left:5px;">接続準備中...</span>
     </div>
@@ -353,30 +374,55 @@
       });
     }
 
-    // 【共有URL発行】ゲスト配信者用 ＆ リスナー・一般参加用を両方表示
-    function showShareUrlModal() {
-      let cleanUrl = window.location.href.split('?')[0];
-      let shareUrl = `${cleanUrl}?room=${currentRoomId}`;
-      
-      let message = "【コラボ配信者用（ドック＆ソース設定用）】\n" +
-                    "このURLをゲスト配信者に渡してください（カスタムドックに入力して使えます）\n" +
-                    shareUrl + "\n\n" +
-                    "--------------------------------------------------\n" +
-                    "【リスナー・参加者用（ブラウザお絵描き参加用）】\n" +
-                    "このURLを配信用チャット等に貼ると、リスナーもブラウザから直接お絵描きに参加できます\n" +
-                    shareUrl;
-
-      prompt("以下のURLをコピーして相手に伝えてください：", message);
-    }
-
-    function showSourceUrlModal() {
+    // --- カスタムモーダルの制御 ---
+    function showShareModal() {
       if (!currentRoomId) {
         alert("ルームIDの取得中です。数秒待ってからもう一度お試しください。");
         return;
       }
       let cleanUrl = window.location.href.split('?')[0];
-      const sourceUrl = `${cleanUrl}?room=${currentRoomId}&display`;
-      prompt("【OBSブラウザソース用URL】\n以下のURLをコピーして、ご自身のOBSのブラウザソースに貼り付けてください：", sourceUrl);
+      let shareUrl = `${cleanUrl}?room=${currentRoomId}`;
+
+      document.getElementById('modal-title').innerText = "🤝 共有URLの発行";
+      document.getElementById('modal-body').innerHTML = `
+        <div class="url-row">
+          <label>① コラボ配信者用（カスタムドック・ソース設定用）</label>
+          <div class="url-input-box">
+            <input type="text" value="${shareUrl}" readonly onclick="this.select()">
+          </div>
+        </div>
+        <div class="url-row">
+          <label>② リスナー・参加者用（ブラウザお絵描き参加用）</label>
+          <div class="url-input-box">
+            <input type="text" value="${shareUrl}" readonly onclick="this.select()">
+          </div>
+        </div>
+      `;
+      document.getElementById('custom-modal').style.display = 'flex';
+    }
+
+    function showSourceModal() {
+      if (!currentRoomId) {
+        alert("ルームIDの取得中です。数秒待ってからもう一度お試しください。");
+        return;
+      }
+      let cleanUrl = window.location.href.split('?')[0];
+      let sourceUrl = `${cleanUrl}?room=${currentRoomId}&display`;
+
+      document.getElementById('modal-title').innerText = "📺 OBSブラウザソース用URLの発行";
+      document.getElementById('modal-body').innerHTML = `
+        <div class="url-row">
+          <label>ご自身のOBSの「ブラウザソース」に貼り付けてください：</label>
+          <div class="url-input-box">
+            <input type="text" value="${sourceUrl}" readonly onclick="this.select()">
+          </div>
+        </div>
+      `;
+      document.getElementById('custom-modal').style.display = 'flex';
+    }
+
+    function closeModal() {
+      document.getElementById('custom-modal').style.display = 'none';
     }
 
     function setupConnection(connection) {
