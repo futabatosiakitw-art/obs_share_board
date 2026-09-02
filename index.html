@@ -8,10 +8,16 @@
     :root { --bg: #18181b; --card: #26262c; --accent: #9146ff; --text: #efeff1; }
     body { margin: 0; padding: 0; background: #18181b; color: var(--text); font-family: sans-serif; font-size: 11px; overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
     
-    /* パスワード認証画面（ロック中） */
+    /* パスワード認証画面 */
     #auth-screen { position: fixed; inset: 0; background: #121215; z-index: 9999; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 12px; }
     #auth-screen input { padding: 8px 12px; background: #26262c; border: 1px solid #464649; color: #fff; border-radius: 4px; font-size: 14px; text-align: center; }
     #auth-screen button { padding: 8px 16px; background: var(--accent); border: none; color: #fff; font-weight: bold; border-radius: 4px; cursor: pointer; }
+
+    /* URLに ?display が含まれている場合は強制的にパネル等を非表示＆透過 */
+    body.display-mode { background: transparent !important; }
+    body.display-mode #auth-screen { display: none !important; }
+    body.display-mode .control-panel { display: none !important; }
+    body.display-mode .viewport { width: 100vw !important; height: 100vh !important; border: none !important; background: transparent !important; }
 
     /* 操作コントロールパネル */
     .control-panel { background: #1f1f23; border-bottom: 2px solid #9146ff; padding: 6px 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex-shrink: 0; }
@@ -42,12 +48,11 @@
     }
     canvas { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; pointer-events: auto; cursor: crosshair; }
 
-    .url-box { background: #000; padding: 2px 4px; border: 1px solid #464649; border-radius: 3px; color: #00f076; font-family: monospace; font-size: 10px; user-select: all; width: 180px; }
+    .url-box { background: #000; padding: 2px 4px; border: 1px solid #464649; border-radius: 3px; color: #00f076; font-family: monospace; font-size: 10px; user-select: all; width: 160px; }
   </style>
 </head>
 <body>
 
-  <!-- パスワード認証画面 -->
   <div id="auth-screen">
     <h2>🔒 購入者用パスワードを入力してください</h2>
     <p style="color:#aaa; margin:0;">BOOTHの商品説明または同梱テキストに記載されている合言葉を入力してください。</p>
@@ -56,12 +61,17 @@
     <p id="auth-error" style="color:#ff3b30; margin:0; display:none;">パスワードが違います</p>
   </div>
 
-  <!-- 操作コントロールパネル -->
   <div class="control-panel" id="control-panel">
     <div class="panel-group">
       <b>🔗 接続:</b>
       <button onclick="createRoom()">部屋を作る</button>
-      <span id="room-info">未接続</span>
+      <input type="text" id="join-room-id" placeholder="ルームID" style="width:70px; background:#000; color:#fff; border:1px solid #464649; padding:2px; font-size:10px;">
+      <button onclick="joinRoomFromInput()">参加する</button>
+      <button onclick="showSourceUrlModal()" style="background:#00f076; color:#000; border-color:#00f076;" title="OBSのブラウザソース用URLを発行">📺 ソース用URL</button>
+    </div>
+
+    <div class="panel-group" id="room-status-area" style="color:#00f076; font-family:monospace; font-size:10px;">
+      未接続
     </div>
 
     <div class="panel-group">
@@ -106,7 +116,6 @@
     </div>
   </div>
 
-  <!-- ビューポート -->
   <div class="viewport" id="viewport">
     <div class="canvas-container" id="canvas-container">
       <canvas id="paintCanvas" width="1920" height="1080"></canvas>
@@ -114,10 +123,7 @@
   </div>
 
   <script>
-    // ==========================================
-    // ▼ ここにBOOTHの購入者にだけ伝える合言葉を設定してください
-    // ==========================================
-    const SECRET_PASSWORD = "Siaki_Atelier_2026"; 
+    const SECRET_PASSWORD = "siaki-collab-2026"; 
 
     function checkPassword() {
       const inputVal = document.getElementById('auth-password').value;
@@ -128,23 +134,23 @@
       }
     }
 
-    // Enterキーでも認証できるようにする
     document.getElementById('auth-password').addEventListener('keypress', (e) => {
       if (e.key === 'Enter') checkPassword();
     });
 
-    // OBSのブラウザソース(?display)として開いたときは、認証画面をスキップして即時表示させる場合
     window.onload = () => {
-      const urlParams = new URLSearchParams(window.location.search);
-      if (urlParams.has('display')) {
-        document.getElementById('auth-screen').style.display = 'none';
+      if (window.location.search.includes('display')) {
+        document.body.classList.add('display-mode');
       }
 
       updateTransform();
       window.addEventListener('resize', updateTransform);
 
+      const urlParams = new URLSearchParams(window.location.search);
       const roomId = urlParams.get('room');
       if (roomId) {
+        // URLにルームIDが含まれている場合は自動でその部屋に参加する
+        currentRoomId = roomId;
         joinRoom(roomId);
       }
     };
@@ -163,6 +169,7 @@
     let conn = null;
     let isHost = false;
     let connections = [];
+    let currentRoomId = null;
 
     function updateTransform() {
       const scaleInput = document.getElementById('scale-range').value;
@@ -321,21 +328,32 @@
       }
     }
 
+    // 部屋を作る（ホスト側）
     function createRoom() {
       peer = new Peer();
       isHost = true;
 
       peer.on('open', (id) => {
-        let cleanUrl = window.location.href.split('?')[0];
-        const shareUrl = `${cleanUrl}?room=${id}&display`;
-        
-        document.getElementById('room-info').innerHTML = `部屋URL: <input class="url-box" type="text" value="${shareUrl}" readonly onclick="this.select()">`;
+        currentRoomId = id;
+        document.getElementById('room-status-area').innerHTML = `部屋ID: <b style="color:#fff; user-select:all;">${id}</b> (接続待ち)`;
       });
 
       peer.on('connection', (connection) => {
         connections.push(connection);
         setupConnection(connection);
+        document.getElementById('room-status-area').innerHTML = `コラボ中！(ID: ${currentRoomId})`;
       });
+    }
+
+    // 入力されたルームIDに参加する（ゲスト側、または自分で指定する場合）
+    function joinRoomFromInput() {
+      const roomId = document.getElementById('join-room-id').value.trim();
+      if (!roomId) {
+        alert("ルームIDを入力してください");
+        return;
+      }
+      currentRoomId = roomId;
+      joinRoom(roomId);
     }
 
     function joinRoom(roomId) {
@@ -345,8 +363,20 @@
       peer.on('open', () => {
         conn = peer.connect(roomId);
         setupConnection(conn);
-        document.getElementById('room-info').innerText = 'コラボルーム接続中！';
+        document.getElementById('room-status-area').innerText = 'ルーム接続中！';
       });
+    }
+
+    // ソース用URLをポップアップで発行するボタン
+    function showSourceUrlModal() {
+      if (!currentRoomId) {
+        alert("先に「部屋を作る」または「ルームに参加（接続）」してください！");
+        return;
+      }
+      let cleanUrl = window.location.href.split('?')[0];
+      const sourceUrl = `${cleanUrl}?room=${currentRoomId}&display`;
+      
+      prompt("【OBSブラウザソース用URL】\n以下のURLをOBSのブラウザソースに貼り付けてください：", sourceUrl);
     }
 
     function setupConnection(connection) {
