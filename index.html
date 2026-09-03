@@ -85,8 +85,11 @@
 
     <div class="panel-group">
       <b>🖼️ 背景:</b>
-      <input type="file" accept="image/*" onchange="loadBgImage(event)" style="width:130px;">
-      <button onclick="clearBgImage()">削除</button>
+      <input type="file" id="bg-file-input" accept="image/*" onchange="loadBgImage(event)" style="width:130px;">
+      <button id="bg-clear-btn" onclick="clearBgImage()">削除</button>
+      <label style="display:flex; align-items:center; gap:3px; cursor:pointer; margin-left:2px;">
+        <input type="checkbox" id="lock-bg" onchange="toggleBgLock()"> ロック
+      </label>
     </div>
 
     <div class="panel-group">
@@ -111,7 +114,10 @@
         <div class="stamp-thumb" onclick="setStamp('👍', this)" style="display:flex;justify-content:center;align-items:center;font-size:14px;">👍</div>
         <div class="stamp-thumb" onclick="setStamp('✨', this)" style="display:flex;justify-content:center;align-items:center;font-size:14px;">✨</div>
       </div>
-      <input type="file" accept="image/*" style="width:60px;" onchange="loadCustomStamp(event)" title="ローカル画像を追加">
+      <input type="file" id="stamp-file-input" accept="image/*" style="width:60px;" onchange="loadCustomStamp(event)" title="ローカル画像を追加">
+      <label style="display:flex; align-items:center; gap:3px; cursor:pointer; margin-left:2px;">
+        <input type="checkbox" id="lock-stamp" onchange="toggleStampLock()"> ロック
+      </label>
     </div>
 
     <div class="panel-group">
@@ -148,6 +154,10 @@
     let isHost = false;
     let connections = [];
     let currentRoomId = null;
+
+    // ロック状態（ホスト側が保持・管理）
+    let isBgLocked = false;
+    let isStampLocked = false;
 
     window.onload = () => {
       const urlParams = new URLSearchParams(window.location.search);
@@ -198,7 +208,6 @@
     let currentColor = '#000000';
     let currentStamp = '⭐';
 
-    // メモリ上のカスタムスタンプ画像（DataURLからImageオブジェクトをキャッシュ管理）
     const stampImageCache = {};
 
     function saveAndApplyTransform() {
@@ -250,6 +259,37 @@
       }
     }
 
+    function toggleBgLock() {
+      if (!isHost) return;
+      isBgLocked = document.getElementById('lock-bg').checked;
+      broadcastData({ type: 'lock_bg_status', locked: isBgLocked });
+    }
+
+    function toggleStampLock() {
+      if (!isHost) return;
+      isStampLocked = document.getElementById('lock-stamp').checked;
+      broadcastData({ type: 'lock_stamp_status', locked: isStampLocked });
+    }
+
+    function updateGuestControls() {
+      if (isHost) return; // ホストは影響なし
+
+      // 背景ロック時の制御
+      const bgInput = document.getElementById('bg-file-input');
+      const bgClear = document.getElementById('bg-clear-btn');
+      if (bgInput) bgInput.disabled = isBgLocked;
+      if (bgClear) bgClear.disabled = isBgLocked;
+
+      // スタンプロック時の制御（新規追加ファイル・既存スタンプ選択）
+      const stampInput = document.getElementById('stamp-file-input');
+      if (stampInput) stampInput.disabled = isStampLocked;
+
+      if (isStampLocked && currentTool === 'stamp') {
+        // ロックされたら強制的にペンツールに戻す
+        setTool('pen', currentColor, document.querySelector('.color-btn'));
+      }
+    }
+
     function setCustomColor(color) {
       currentTool = 'pen';
       currentColor = color;
@@ -257,6 +297,10 @@
     }
 
     function setTool(tool, color, element) {
+      if (tool === 'stamp' && !isHost && isStampLocked) {
+        alert("ホストによってスタンプ機能がロックされています。");
+        return;
+      }
       currentTool = tool;
       if (color) currentColor = color;
       document.querySelectorAll('.stamp-thumb').forEach(el => el.classList.remove('active'));
@@ -264,6 +308,10 @@
     }
 
     function setStamp(stampData, element) {
+      if (!isHost && isStampLocked) {
+        alert("ホストによってスタンプ機能がロックされています。");
+        return;
+      }
       currentTool = 'stamp';
       currentStamp = stampData;
       document.querySelectorAll('.stamp-thumb').forEach(el => el.classList.remove('active'));
@@ -271,13 +319,17 @@
     }
 
     function loadCustomStamp(event) {
+      if (!isHost && isStampLocked) {
+        alert("ホストによってスタンプの追加がロックされています。");
+        event.target.value = '';
+        return;
+      }
       const file = event.target.files[0];
       if (!file) return;
       const reader = new FileReader();
       reader.onload = (e) => {
         const dataUrl = e.target.result;
         registerAndSelectStamp(dataUrl);
-        // 相手にカスタムスタンプの追加を同期
         broadcastData({ type: 'add_custom_stamp', dataUrl: dataUrl });
       };
       reader.readAsDataURL(file);
@@ -308,6 +360,11 @@
     }
 
     function loadBgImage(event) {
+      if (!isHost && isBgLocked) {
+        alert("ホストによって背景の変更がロックされています。");
+        event.target.value = '';
+        return;
+      }
       const file = event.target.files[0];
       if (!file) return;
       const reader = new FileReader();
@@ -320,8 +377,12 @@
     }
 
     function clearBgImage() {
+      if (!isHost && isBgLocked) {
+        alert("ホストによって背景の変更がロックされています。");
+        return;
+      }
       container.style.backgroundImage = 'none';
-      const fileInput = document.querySelector('input[type="file"]');
+      const fileInput = document.getElementById('bg-file-input');
       if(fileInput) fileInput.value = '';
       broadcastData({ type: 'clear_bg' });
     }
@@ -341,6 +402,8 @@
     let lastX = 0, lastY = 0;
 
     function startDraw(e) {
+      if (currentTool === 'stamp' && !isHost && isStampLocked) return;
+
       const pos = getMousePos(e);
       isDrawing = true;
       lastX = pos.x;
@@ -350,7 +413,6 @@
         drawStamp(pos.x, pos.y, currentStamp);
         
         let stampPayload = currentStamp;
-        // カスタムスタンプ（Imageオブジェクト）の場合はDataURLに変換して送信する
         if (currentStamp instanceof HTMLImageElement) {
           stampPayload = { type: 'image_url', url: currentStamp.src };
         }
@@ -405,7 +467,6 @@
       } else if (stamp instanceof HTMLImageElement) {
         ctx.drawImage(stamp, x - 25, y - 25, 50, 50);
       } else if (stamp && stamp.type === 'image_url') {
-        // ネットワーク経由で受け取った画像スタンプの描画処理
         if (stampImageCache[stamp.url]) {
           const img = stampImageCache[stamp.url];
           ctx.drawImage(img, x - 25, y - 25, 50, 50);
@@ -447,6 +508,11 @@
       peer.on('connection', (connection) => {
         connections.push(connection);
         setupConnection(connection);
+        
+        // ゲストが接続してきたときに、現在の背景ロック・スタンプロック状態を即座に送る
+        connection.send({ type: 'lock_bg_status', locked: isBgLocked });
+        connection.send({ type: 'lock_stamp_status', locked: isStampLocked });
+
         if(statusArea) statusArea.innerHTML = `<span style="color:#00f076;">コラボ中！</span>`;
       });
       
@@ -537,6 +603,12 @@
           container.style.backgroundImage = `url(${data.dataUrl})`;
         } else if (data.type === 'clear_bg') {
           container.style.backgroundImage = 'none';
+        } else if (data.type === 'lock_bg_status') {
+          isBgLocked = data.locked;
+          updateGuestControls();
+        } else if (data.type === 'lock_stamp_status') {
+          isStampLocked = data.locked;
+          updateGuestControls();
         }
 
         if (isHost) {
