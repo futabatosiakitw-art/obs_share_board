@@ -33,11 +33,10 @@
     button:hover { background: var(--accent); border-color: var(--accent); }
     input[type="range"] { width: 70px; cursor: pointer; }
     select, input[type="file"] { background: #000; color: #fff; border: 1px solid #464649; padding: 2px; border-radius: 3px; font-size: 10px; }
+    input[type="color"] { background: transparent; border: none; width: 22px; height: 22px; cursor: pointer; padding: 0; }
 
-    .color-btn { width: 18px; height: 18px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
-    .color-btn.active { border-color: #fff; transform: scale(1.1); }
     .stamp-thumb { width: 22px; height: 22px; object-fit: cover; border: 1px solid #464649; cursor: pointer; border-radius: 2px; background: #fff; }
-    .stamp-thumb.active { border-color: var(--accent); }
+    .stamp-thumb.active { border-color: var(--accent); transform: scale(1.1); }
 
     /* ビューポート：ドック側は常にウィンドウにフィット、display側はOBSソース用に独立変形 */
     .viewport { position: relative; flex: 1; width: 100%; overflow: hidden; display: flex; justify-content: center; align-items: center; background: #18181b; }
@@ -98,12 +97,7 @@
 
     <div class="panel-group">
       <b>ペン:</b>
-      <button class="color-btn active" style="background:#000000;" onclick="setTool('pen', '#000000', this)"></button>
-      <button class="color-btn" style="background:#ffffff;" onclick="setTool('pen', '#ffffff', this)"></button>
-      <button class="color-btn" style="background:#ff3b30;" onclick="setTool('pen', '#ff3b30', this)"></button>
-      <button class="color-btn" style="background:#34c759;" onclick="setTool('pen', '#34c759', this)"></button>
-      <button class="color-btn" style="background:#ffcc00;" onclick="setTool('pen', '#ffcc00', this)"></button>
-      <button class="color-btn" style="background:#007aff;" onclick="setTool('pen', '#007aff', this)"></button>
+      <input type="color" id="color-picker" value="#000000" onchange="setCustomColor(this.value)">
       <button onclick="setTool('eraser', null, this)">消しゴム</button>
       <span>太さ:</span> <input type="range" id="brush-size" min="3" max="20" value="5" oninput="document.getElementById('size-val').innerText=this.value+'px'"> <span id="size-val">5px</span>
     </div>
@@ -174,13 +168,11 @@
         document.body.classList.add('display-mode');
       }
 
-      // 初回レイアウト適用
       loadTransformToUI();
       applyTransformToViewport();
 
       window.addEventListener('resize', () => applyTransformToViewport());
 
-      // OBSソース（display版）側は、ドック側でのスライダー変更を監視して自分の見た目だけ自動連動させる
       window.addEventListener('storage', (e) => {
         if (e.key === 'obs_canvas_layout') {
           loadTransformToUI();
@@ -206,7 +198,9 @@
     let currentColor = '#000000';
     let currentStamp = '⭐';
 
-    // ドック側でスライダーを動かしたとき：数値を保存して、displayモードなら即座に見た目に反映
+    // メモリ上のカスタムスタンプ画像（DataURLからImageオブジェクトをキャッシュ管理）
+    const stampImageCache = {};
+
     function saveAndApplyTransform() {
       const scaleInput = document.getElementById('scale-range').value;
       const x = document.getElementById('pos-x').value;
@@ -220,7 +214,6 @@
       applyTransformToViewport();
     }
 
-    // 保存されているレイアウト数値をコントロールパネルのUIに読み込む
     function loadTransformToUI() {
       try {
         const saved = localStorage.getItem('obs_canvas_layout');
@@ -236,7 +229,6 @@
       } catch(e) {}
     }
 
-    // ビューポート（キャンバスのコンテナ）の変形を計算・適用する
     function applyTransformToViewport() {
       const isDisplayMode = window.location.search.includes('display');
       const scaleInput = document.getElementById('scale-range') ? document.getElementById('scale-range').value : 100;
@@ -251,26 +243,30 @@
       const baseScale = Math.min(vWidth / 1920, vHeight / 1080);
 
       if (isDisplayMode) {
-        // ★OBSブラウザソース側：ドックのスライダー（拡大・位置）と連動して映り方が変わる
         const finalScale = baseScale * userScale;
         container.style.transform = `translate(${x}px, ${y}px) scale(${finalScale})`;
       } else {
-        // ★カスタムブラウザドック側：ドックのウィンドウサイズに完全に固定フィット（スライダーによる変形は無視）
         container.style.transform = `translate(0px, 0px) scale(${baseScale})`;
       }
+    }
+
+    function setCustomColor(color) {
+      currentTool = 'pen';
+      currentColor = color;
+      document.querySelectorAll('.stamp-thumb').forEach(el => el.classList.remove('active'));
     }
 
     function setTool(tool, color, element) {
       currentTool = tool;
       if (color) currentColor = color;
-      document.querySelectorAll('.color-btn, .stamp-thumb').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.stamp-thumb').forEach(el => el.classList.remove('active'));
       if (element) element.classList.add('active');
     }
 
     function setStamp(stampData, element) {
       currentTool = 'stamp';
       currentStamp = stampData;
-      document.querySelectorAll('.color-btn, .stamp-thumb').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.stamp-thumb').forEach(el => el.classList.remove('active'));
       if (element) element.classList.add('active');
     }
 
@@ -279,19 +275,36 @@
       if (!file) return;
       const reader = new FileReader();
       reader.onload = (e) => {
-        const img = new Image();
-        img.onload = () => {
-          const containerEl = document.getElementById('stamp-container');
-          const thumb = document.createElement('img');
-          thumb.src = e.target.result;
-          thumb.className = 'stamp-thumb';
-          thumb.onclick = () => { setStamp(img, thumb); };
-          containerEl.appendChild(thumb);
-          setStamp(img, thumb);
-        };
-        img.src = e.target.result;
+        const dataUrl = e.target.result;
+        registerAndSelectStamp(dataUrl);
+        // 相手にカスタムスタンプの追加を同期
+        broadcastData({ type: 'add_custom_stamp', dataUrl: dataUrl });
       };
       reader.readAsDataURL(file);
+    }
+
+    function registerAndSelectStamp(dataUrl) {
+      if (stampImageCache[dataUrl]) {
+        const img = stampImageCache[dataUrl];
+        selectStampThumb(img, dataUrl);
+        return;
+      }
+      const img = new Image();
+      img.onload = () => {
+        stampImageCache[dataUrl] = img;
+        selectStampThumb(img, dataUrl);
+      };
+      img.src = dataUrl;
+    }
+
+    function selectStampThumb(imgObj, dataUrl) {
+      const containerEl = document.getElementById('stamp-container');
+      const thumb = document.createElement('img');
+      thumb.src = dataUrl;
+      thumb.className = 'stamp-thumb';
+      thumb.onclick = () => { setStamp(imgObj, thumb); };
+      containerEl.appendChild(thumb);
+      setStamp(imgObj, thumb);
     }
 
     function loadBgImage(event) {
@@ -335,7 +348,14 @@
 
       if (currentTool === 'stamp') {
         drawStamp(pos.x, pos.y, currentStamp);
-        broadcastData({ type: 'draw_stamp', x: pos.x, y: pos.y, stamp: currentStamp });
+        
+        let stampPayload = currentStamp;
+        // カスタムスタンプ（Imageオブジェクト）の場合はDataURLに変換して送信する
+        if (currentStamp instanceof HTMLImageElement) {
+          stampPayload = { type: 'image_url', url: currentStamp.src };
+        }
+
+        broadcastData({ type: 'draw_stamp', x: pos.x, y: pos.y, stamp: stampPayload });
         isDrawing = false;
       }
     }
@@ -384,6 +404,19 @@
         ctx.fillText(stamp, x, y);
       } else if (stamp instanceof HTMLImageElement) {
         ctx.drawImage(stamp, x - 25, y - 25, 50, 50);
+      } else if (stamp && stamp.type === 'image_url') {
+        // ネットワーク経由で受け取った画像スタンプの描画処理
+        if (stampImageCache[stamp.url]) {
+          const img = stampImageCache[stamp.url];
+          ctx.drawImage(img, x - 25, y - 25, 50, 50);
+        } else {
+          const img = new Image();
+          img.onload = () => {
+            stampImageCache[stamp.url] = img;
+            ctx.drawImage(img, x - 25, y - 25, 50, 50);
+          };
+          img.src = stamp.url;
+        }
       }
     }
 
@@ -496,6 +529,8 @@
           drawLine(data.x1, data.y1, data.x2, data.y2, data.color, data.size, data.isEraser);
         } else if (data.type === 'draw_stamp') {
           drawStamp(data.x, data.y, data.stamp);
+        } else if (data.type === 'add_custom_stamp') {
+          registerAndSelectStamp(data.dataUrl);
         } else if (data.type === 'clear_room') {
           ctx.clearRect(0, 0, canvas.width, canvas.height);
         } else if (data.type === 'set_bg') {
