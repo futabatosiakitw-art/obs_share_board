@@ -20,11 +20,12 @@
     .url-input-box { display: flex; gap: 6px; }
     .url-input-box input { flex: 1; background: #000; color: #00f076; border: 1px solid #464649; padding: 4px; border-radius: 3px; font-family: monospace; font-size: 10px; }
 
+    /* displayモード（OBSソース用）は背景透過＆パネル非表示 */
     body.display-mode { background: transparent !important; }
     body.display-mode #auth-screen { display: none !important; }
     body.display-mode #custom-modal { display: none !important; }
     body.display-mode .control-panel { display: none !important; }
-    body.display-mode .viewport { width: 100vw !important; height: 100vh !important; border: none !important; background: transparent !important; }
+    body.display-mode .viewport { width: 100vw !important; height: 100vh !important; background: transparent !important; }
 
     .control-panel { background: #1f1f23; border-bottom: 2px solid #9146ff; padding: 6px 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex-shrink: 0; }
     .panel-group { background: var(--card); border: 1px solid #303036; padding: 5px 7px; border-radius: 4px; display: flex; align-items: center; gap: 5px; }
@@ -38,8 +39,19 @@
     .stamp-thumb { width: 22px; height: 22px; object-fit: cover; border: 1px solid #464649; cursor: pointer; border-radius: 2px; background: #fff; }
     .stamp-thumb.active { border-color: var(--accent); }
 
-    .viewport { position: relative; flex: 1; width: 100%; background: transparent; overflow: hidden; display: flex; justify-content: center; align-items: center; }
-    .canvas-container { position: absolute; width: 1920px; height: 1080px; transform-origin: center center; background-size: contain; background-position: center; background-repeat: no-repeat; background-color: transparent; }
+    /* ビューポート：ドック側は常にウィンドウにフィット、display側はOBSソース用に独立変形 */
+    .viewport { position: relative; flex: 1; width: 100%; overflow: hidden; display: flex; justify-content: center; align-items: center; background: #18181b; }
+    
+    .canvas-container { 
+      position: absolute; 
+      width: 1920px; 
+      height: 1080px; 
+      transform-origin: center center; 
+      background-size: contain; 
+      background-position: center; 
+      background-repeat: no-repeat;
+      background-color: transparent;
+    }
     canvas { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; pointer-events: auto; cursor: crosshair; }
   </style>
 </head>
@@ -146,6 +158,7 @@
     window.onload = () => {
       const urlParams = new URLSearchParams(window.location.search);
       const roomId = urlParams.get('room');
+      const isDisplayMode = window.location.search.includes('display');
 
       if (roomId) {
         document.getElementById('auth-screen').style.display = 'none';
@@ -157,18 +170,21 @@
         } catch(e) {}
       }
 
-      if (window.location.search.includes('display')) {
+      if (isDisplayMode) {
         document.body.classList.add('display-mode');
       }
 
-      // 保存されたレイアウトをロードして適用
-      loadTransform();
-      window.addEventListener('resize', () => applyTransform());
+      // 初回レイアウト適用
+      loadTransformToUI();
+      applyTransformToViewport();
 
-      // OBSのブラウザソース（display版）側は、ストレージの変更を監視してリアルタイムに自動連動させる
+      window.addEventListener('resize', () => applyTransformToViewport());
+
+      // OBSソース（display版）側は、ドック側でのスライダー変更を監視して自分の見た目だけ自動連動させる
       window.addEventListener('storage', (e) => {
         if (e.key === 'obs_canvas_layout') {
-          loadTransform();
+          loadTransformToUI();
+          applyTransformToViewport();
         }
       });
 
@@ -190,7 +206,7 @@
     let currentColor = '#000000';
     let currentStamp = '⭐';
 
-    // レイアウトを保存して適用（自分だけの環境で同期）
+    // ドック側でスライダーを動かしたとき：数値を保存して、displayモードなら即座に見た目に反映
     function saveAndApplyTransform() {
       const scaleInput = document.getElementById('scale-range').value;
       const x = document.getElementById('pos-x').value;
@@ -201,34 +217,47 @@
         localStorage.setItem('obs_canvas_layout', layoutData);
       } catch(e) {}
 
-      applyTransform();
+      applyTransformToViewport();
     }
 
-    // 保存されているレイアウトを読み込んで適用
-    function loadTransform() {
+    // 保存されているレイアウト数値をコントロールパネルのUIに読み込む
+    function loadTransformToUI() {
       try {
         const saved = localStorage.getItem('obs_canvas_layout');
         if (saved) {
           const data = JSON.parse(saved);
-          if(document.getElementById('scale-range')) document.getElementById('scale-range').value = data.scale;
-          if(document.getElementById('pos-x')) document.getElementById('pos-x').value = data.x;
-          if(document.getElementById('pos-y')) document.getElementById('pos-y').value = data.y;
+          const scaleEl = document.getElementById('scale-range');
+          const xEl = document.getElementById('pos-x');
+          const yEl = document.getElementById('pos-y');
+          if(scaleEl) scaleEl.value = data.scale;
+          if(xEl) xEl.value = data.x;
+          if(yEl) yEl.value = data.y;
         }
       } catch(e) {}
-      applyTransform();
     }
 
-    function applyTransform() {
-      const scaleInput = document.getElementById('scale-range').value;
+    // ビューポート（キャンバスのコンテナ）の変形を計算・適用する
+    function applyTransformToViewport() {
+      const isDisplayMode = window.location.search.includes('display');
+      const scaleInput = document.getElementById('scale-range') ? document.getElementById('scale-range').value : 100;
       if(document.getElementById('scale-val')) document.getElementById('scale-val').innerText = scaleInput + '%';
       const userScale = scaleInput / 100;
-      const x = parseInt(document.getElementById('pos-x').value) || 0;
-      const y = parseInt(document.getElementById('pos-y').value) || 0;
+
+      const x = parseInt(document.getElementById('pos-x') ? document.getElementById('pos-x').value : 0) || 0;
+      const y = parseInt(document.getElementById('pos-y') ? document.getElementById('pos-y').value : 0) || 0;
+      
       const vWidth = viewport.clientWidth || 1920;
       const vHeight = viewport.clientHeight || 1080;
       const baseScale = Math.min(vWidth / 1920, vHeight / 1080);
-      const finalScale = baseScale * userScale;
-      container.style.transform = `translate(${x}px, ${y}px) scale(${finalScale})`;
+
+      if (isDisplayMode) {
+        // ★OBSブラウザソース側：ドックのスライダー（拡大・位置）と連動して映り方が変わる
+        const finalScale = baseScale * userScale;
+        container.style.transform = `translate(${x}px, ${y}px) scale(${finalScale})`;
+      } else {
+        // ★カスタムブラウザドック側：ドックのウィンドウサイズに完全に固定フィット（スライダーによる変形は無視）
+        container.style.transform = `translate(0px, 0px) scale(${baseScale})`;
+      }
     }
 
     function setTool(tool, color, element) {
