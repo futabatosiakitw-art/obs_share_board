@@ -12,7 +12,6 @@
     #auth-screen input { padding: 8px 12px; background: #26262c; border: 1px solid #464649; color: #fff; border-radius: 4px; font-size: 14px; text-align: center; }
     #auth-screen button { padding: 8px 16px; background: var(--accent); border: none; color: #fff; font-weight: bold; border-radius: 4px; cursor: pointer; }
 
-    /* カスタムモーダル（ポップアップ）のデザイン */
     #custom-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 8888; display: none; justify-content: center; align-items: center; }
     .modal-content { background: #26262c; border: 1px solid #464649; border-radius: 6px; padding: 16px; width: 420px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
     .modal-content h3 { margin: 0; font-size: 13px; color: var(--accent); }
@@ -80,9 +79,9 @@
     </div>
 
     <div class="panel-group">
-      <b>🔍 OBS表示:</b> <input type="range" id="scale-range" min="10" max="200" value="100" oninput="updateTransform()"> <span id="scale-val">100%</span>
-      <b>↔️ X:</b> <input type="range" id="pos-x" min="-960" max="960" value="0" oninput="updateTransform()">
-      <b>↕️ Y:</b> <input type="range" id="pos-y" min="-540" max="540" value="0" oninput="updateTransform()">
+      <b>🔍 OBS表示:</b> <input type="range" id="scale-range" min="10" max="200" value="100" oninput="saveAndApplyTransform()"> <span id="scale-val">100%</span>
+      <b>↔️ X:</b> <input type="range" id="pos-x" min="-960" max="960" value="0" oninput="saveAndApplyTransform()">
+      <b>↕️ Y:</b> <input type="range" id="pos-y" min="-540" max="540" value="0" oninput="saveAndApplyTransform()">
     </div>
 
     <div class="panel-group">
@@ -148,11 +147,9 @@
       const urlParams = new URLSearchParams(window.location.search);
       const roomId = urlParams.get('room');
 
-      // ★URLに room（共有URL経由）が含まれている場合は、パスワード入力を自動でバイパスする
       if (roomId) {
         document.getElementById('auth-screen').style.display = 'none';
       } else {
-        // ホストとして直接開いた場合は保存されたパスワードをチェック
         try {
           if (localStorage.getItem('shared_board_pass') === SECRET_PASSWORD) {
             document.getElementById('auth-screen').style.display = 'none';
@@ -164,8 +161,16 @@
         document.body.classList.add('display-mode');
       }
 
-      updateTransform();
-      window.addEventListener('resize', updateTransform);
+      // 保存されたレイアウトをロードして適用
+      loadTransform();
+      window.addEventListener('resize', () => applyTransform());
+
+      // OBSのブラウザソース（display版）側は、ストレージの変更を監視してリアルタイムに自動連動させる
+      window.addEventListener('storage', (e) => {
+        if (e.key === 'obs_canvas_layout') {
+          loadTransform();
+        }
+      });
 
       if (roomId) {
         currentRoomId = roomId;
@@ -185,9 +190,37 @@
     let currentColor = '#000000';
     let currentStamp = '⭐';
 
-    function updateTransform() {
+    // レイアウトを保存して適用（自分だけの環境で同期）
+    function saveAndApplyTransform() {
       const scaleInput = document.getElementById('scale-range').value;
-      document.getElementById('scale-val').innerText = scaleInput + '%';
+      const x = document.getElementById('pos-x').value;
+      const y = document.getElementById('pos-y').value;
+
+      const layoutData = JSON.stringify({ scale: scaleInput, x: x, y: y });
+      try {
+        localStorage.setItem('obs_canvas_layout', layoutData);
+      } catch(e) {}
+
+      applyTransform();
+    }
+
+    // 保存されているレイアウトを読み込んで適用
+    function loadTransform() {
+      try {
+        const saved = localStorage.getItem('obs_canvas_layout');
+        if (saved) {
+          const data = JSON.parse(saved);
+          if(document.getElementById('scale-range')) document.getElementById('scale-range').value = data.scale;
+          if(document.getElementById('pos-x')) document.getElementById('pos-x').value = data.x;
+          if(document.getElementById('pos-y')) document.getElementById('pos-y').value = data.y;
+        }
+      } catch(e) {}
+      applyTransform();
+    }
+
+    function applyTransform() {
+      const scaleInput = document.getElementById('scale-range').value;
+      if(document.getElementById('scale-val')) document.getElementById('scale-val').innerText = scaleInput + '%';
       const userScale = scaleInput / 100;
       const x = parseInt(document.getElementById('pos-x').value) || 0;
       const y = parseInt(document.getElementById('pos-y').value) || 0;
